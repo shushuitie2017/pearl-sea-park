@@ -31,8 +31,11 @@ export function createTicketScreen(parent: HTMLElement): TicketScreen {
   root.style.setProperty('--ticket-reveal-duration', `${TICKET_REVEAL_SECONDS}s`)
 
   const status = root.querySelector<HTMLElement>('.ticket-status')!
-  const label = root.querySelector<HTMLElement>('.ticket-progress-label')!
-  const bar = root.querySelector<HTMLElement>('.ticket-progress > i')!
+  // Re-pointed when the guest clicks Enter: the button is swapped for a fresh
+  // progress read so the post-click warmup wait stays legible.
+  let label = root.querySelector<HTMLElement>('.ticket-progress-label')!
+  let bar = root.querySelector<HTMLElement>('.ticket-progress > i')!
+  let lastFraction = 0
 
   const labels: Record<string, string> = {
     'render-pipeline': '擦亮镜片',
@@ -72,7 +75,11 @@ export function createTicketScreen(parent: HTMLElement): TicketScreen {
   return {
     setProgress(key, fraction) {
       label.textContent = labels[key] ?? key.replace(/-/g, ' ')
-      bar.style.width = `${Math.round(Math.min(1, Math.max(0, fraction)) * 100)}%`
+      // 'ready' is a sentinel that the Enter button is live, not a real warmup
+      // fraction; letting it pin the carried progress to 100% would make the
+      // post-click "铺展乐园" bar jump backwards when the real warm resumes.
+      if (key !== 'ready') lastFraction = Math.min(1, Math.max(0, fraction))
+      bar.style.width = `${Math.round(lastFraction * 100)}%`
     },
 
     showEnter() {
@@ -85,6 +92,17 @@ export function createTicketScreen(parent: HTMLElement): TicketScreen {
         button.addEventListener(
           'click',
           () => {
+            // Entering isn't instant — shader warmup may still be finishing, and
+            // the live loop only starts once it does. Swap the button for a live
+            // progress read (carrying the last known fraction so it never flashes
+            // to zero) so the click is never mistaken for an unresponsive gate.
+            status.innerHTML = `
+              <div class="ticket-progress-label">正在铺展乐园……</div>
+              <div class="ticket-progress"><i></i></div>
+            `
+            label = status.querySelector<HTMLElement>('.ticket-progress-label')!
+            bar = status.querySelector<HTMLElement>('.ticket-progress > i')!
+            bar.style.width = `${Math.round(lastFraction * 100)}%`
             resolve()
           },
           { once: true },

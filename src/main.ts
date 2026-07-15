@@ -175,6 +175,10 @@ async function boot(): Promise<void> {
   await registry.init(ctx, (label, index, total) =>
     ticket.setProgress(label, 0.1 + 0.62 * (index / Math.max(1, total))),
   )
+  // The fixed sun and immutable world can record their shadow commands while
+  // the loading ticket still owns the screen. Later clipmap recenters execute
+  // that bundle instead of traversing the full live scene on the game frame.
+  sky?.sealStaticShadowCasters(scene)
   const postcardAudit = auditPostcardBookmarks()
   canvas.dataset.postcardAudit = JSON.stringify(postcardAudit)
   if (!postcardAudit.complete) {
@@ -211,34 +215,21 @@ async function boot(): Promise<void> {
   // The live loop owns the renderer exclusively, so it must not start until
   // the warm finishes; the Enter click awaits it (near-always already done by
   // then). Validation runs keep their fast reload and skip all of this.
-  // The fixed sun and immutable world record their static shadow casters into
-  // a render bundle once, so later clipmap recenters replay it instead of
-  // traversing the whole live scene on a game frame. That ~1.6 s traversal used
-  // to block the Enter button; for guests it now runs as the first step of the
-  // background warmup, behind the ticket. Validation runs have no warmup, so
-  // they seal synchronously (correctness + fast reload, off any hot path).
-  if (validationMode) sky?.sealStaticShadowCasters(scene)
-
   let warmup: Promise<void> = Promise.resolve()
   if (!validationMode) {
-    warmup = (async () => {
-      // Seal behind the ticket, then warm the shaders. The live loop has not
-      // started, so nothing else drives the renderer; the warm frames below
-      // compile the static-bundle shadow pipelines this seal just created.
-      sky?.sealStaticShadowCasters(scene)
-      await warmupRenderer(
-        ctx,
-        registry,
-        pipeline,
-        (fraction) => ticket.setProgress('prewarm', 0.72 + 0.27 * fraction),
-        { invalidateShadows: () => sky?.invalidateShadowLevels() },
-      )
+    warmup = warmupRenderer(
+      ctx,
+      registry,
+      pipeline,
+      (fraction) => ticket.setProgress('prewarm', 0.72 + 0.27 * fraction),
+      { invalidateShadows: () => sky?.invalidateShadowLevels() },
+    ).then(() => {
       // Warmup just drew every mesh, so every attribute is on the GPU: drop
       // the retained CPU copies of the static park (hundreds of MB of external
       // memory pressure otherwise feeding random full-GC freezes mid-roam).
       const geometryRelease = releaseStaticGeometryArrays(scene)
       canvas.dataset.geometryRelease = JSON.stringify(geometryRelease)
-    })()
+    })
     ticket.setProgress('ready', 1)
   }
 
