@@ -1,4 +1,4 @@
-import type { RigidBody } from '@dimforge/rapier3d-compat'
+import type { RigidBody } from '@dimforge/rapier3d'
 import type { Object3D, Vector3 } from 'three'
 import type { HeldItemKind } from '../player/heldItems'
 

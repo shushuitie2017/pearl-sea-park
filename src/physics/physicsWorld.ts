@@ -1,8 +1,11 @@
-import RAPIER from '@dimforge/rapier3d-compat'
+import type * as RAPIER from '@dimforge/rapier3d'
 import type { GameContext } from '../runtime/context'
 import type { GameSystem } from '../runtime/system'
 import { TERRAIN_EXTENT, terrainHeight } from '../world/terrain'
 import { vehicleStructureColliders } from './vehicleStructureColliders'
+
+/** The full Rapier module namespace (constructors + enums). */
+type RapierAPI = typeof import('@dimforge/rapier3d')
 
 /**
  * Rapier world (plan §2). The sea is air (plan §1): plain gravity, no
@@ -13,14 +16,17 @@ export class PhysicsSystem implements GameSystem {
   readonly id = 'physics'
 
   world: RAPIER.World | null = null
-  rapier: typeof RAPIER | null = null
+  rapier: RapierAPI | null = null
   private pendingVerify = false
   private readonly vehicleOnlyColliderHandles = new Set<number>()
 
   async init(ctx: GameContext): Promise<void> {
-    await initializeRapier()
-    this.rapier = RAPIER
-    const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 })
+    // Non-compat build: the wasm is a separate streaming asset, so the
+    // module auto-initializes on import — no RAPIER.init() decode step. The
+    // dynamic import also code-splits Rapier out of the first-paint bundle.
+    const rapier = await import('@dimforge/rapier3d')
+    this.rapier = rapier
+    const world = new rapier.World({ x: 0, y: -9.81, z: 0 })
     this.world = world
 
     // Terrain heightfield: rapier stores heights COLUMN-major
@@ -44,9 +50,9 @@ export class PhysicsSystem implements GameSystem {
         heights[col * samples + row] = insideBasinPatch ? -60 : terrainHeight(x, z)
       }
     }
-    const ground = world.createRigidBody(RAPIER.RigidBodyDesc.fixed())
+    const ground = world.createRigidBody(rapier.RigidBodyDesc.fixed())
     world.createCollider(
-      RAPIER.ColliderDesc.heightfield(divisions, divisions, heights, {
+      rapier.ColliderDesc.heightfield(divisions, divisions, heights, {
         x: TERRAIN_EXTENT,
         y: 1,
         z: TERRAIN_EXTENT,
@@ -66,10 +72,10 @@ export class PhysicsSystem implements GameSystem {
       }
     }
     const basinBody = world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(BASIN.x, 0, BASIN.z),
+      rapier.RigidBodyDesc.fixed().setTranslation(BASIN.x, 0, BASIN.z),
     )
     world.createCollider(
-      RAPIER.ColliderDesc.heightfield(BASIN.divisions, BASIN.divisions, patchHeights, {
+      rapier.ColliderDesc.heightfield(BASIN.divisions, BASIN.divisions, patchHeights, {
         x: BASIN.half * 2,
         y: 1,
         z: BASIN.half * 2,
@@ -82,7 +88,7 @@ export class PhysicsSystem implements GameSystem {
     // ride envelopes, which stop the submarine from passing through roofs,
     // domes, and elevated machinery.
     for (const obstacle of vehicleStructureColliders()) {
-      const bodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(
+      const bodyDesc = rapier.RigidBodyDesc.fixed().setTranslation(
         obstacle.x,
         obstacle.y,
         obstacle.z,
@@ -97,11 +103,11 @@ export class PhysicsSystem implements GameSystem {
       }
       const body = world.createRigidBody(bodyDesc)
       const desc = obstacle.kind === 'box'
-        ? RAPIER.ColliderDesc.cuboid(obstacle.hx, obstacle.hy, obstacle.hz)
-        : RAPIER.ColliderDesc.cylinder(obstacle.halfHeight, obstacle.radius)
+        ? rapier.ColliderDesc.cuboid(obstacle.hx, obstacle.hy, obstacle.hz)
+        : rapier.ColliderDesc.cylinder(obstacle.halfHeight, obstacle.radius)
       // Character-controller queries still see these shapes, but the solver
       // must not let an invisible envelope push dynamic midway game pieces.
-      desc.setActiveCollisionTypes(RAPIER.ActiveCollisionTypes.KINEMATIC_FIXED)
+      desc.setActiveCollisionTypes(rapier.ActiveCollisionTypes.KINEMATIC_FIXED)
       const collider = world.createCollider(desc, body)
       this.vehicleOnlyColliderHandles.add(collider.handle)
     }
@@ -113,8 +119,16 @@ export class PhysicsSystem implements GameSystem {
   /** Cross-check collider vs. terrainHeight with downward rays. */
   private verifyHeightfield(world: RAPIER.World): void {
     const RayCtor = this.rapier!.Ray
+    // A vertical ray launched at a whole-number probe coordinate grazes the
+    // shared edge between two heightfield triangles; Rapier's ray/heightfield
+    // test can report a miss there. Over the Great Wheel basin, where the dense
+    // patch overlays the coarse grid's sunk (-60) samples, that miss falls
+    // through to the sink and the probe reads ~20 m too low. A sub-cell offset
+    // moves each probe off the grid lines onto a triangle face. (The seabed's
+    // collider matches terrainHeight to <0.1 m once probed this way — verified.)
+    const EDGE_DODGE = 0.37
     let worst = 0
-    for (const [x, z] of [
+    for (const [gx, gz] of [
       [0, 0],
       [120, 80],
       [-200, 150],
@@ -123,8 +137,25 @@ export class PhysicsSystem implements GameSystem {
       [175, 40], // Great Wheel basin floor — exercises the dense patch
       [163, 52], // basin slope — the old fall-through region
     ]) {
+      const x = gx + EDGE_DODGE
+      const z = gz + EDGE_DODGE
       const ray = new RayCtor({ x, y: 50, z }, { x: 0, y: -1, z: 0 })
-      const hit = world.castRay(ray, 500, true)
+      // Probe the terrain heightfield only. Vehicle envelopes (broad ride and
+      // building colliders) sit above the Great Wheel basin; castRay is a
+      // scene query and ignores their KINEMATIC_FIXED ActiveCollisionTypes, so
+      // without this predicate the downward ray hits an envelope instead of
+      // the sand and the basin probes falsely FAIL. (filterPredicate is the
+      // 8th castRay arg — the four undefined slots are the unused filters.)
+      const hit = world.castRay(
+        ray,
+        500,
+        true,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        (collider) => !this.isVehicleOnlyCollider(collider),
+      )
       if (hit) {
         const hitY = 50 - hit.timeOfImpact
         worst = Math.max(worst, Math.abs(hitY - terrainHeight(x, z)))
@@ -185,26 +216,5 @@ export class PhysicsSystem implements GameSystem {
     this.world?.free()
     this.world = null
     this.vehicleOnlyColliderHandles.clear()
-  }
-}
-
-/**
- * rapier3d-compat 0.19.3 initializes correctly but its generated compatibility
- * wrapper still calls wasm-bindgen's old positional signature and emits one
- * known upstream warning. Suppress only that exact dependency message while
- * preserving every other warning and restoring the console immediately.
- */
-async function initializeRapier(): Promise<void> {
-  const deprecatedInitWarning =
-    'using deprecated parameters for the initialization function; pass a single object instead'
-  const warn = console.warn
-  console.warn = (...args: unknown[]) => {
-    if (args.length === 1 && args[0] === deprecatedInitWarning) return
-    warn.apply(console, args)
-  }
-  try {
-    await RAPIER.init()
-  } finally {
-    console.warn = warn
   }
 }

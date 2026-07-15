@@ -1,4 +1,4 @@
-import type { RigidBody } from '@dimforge/rapier3d-compat'
+import type { RigidBody } from '@dimforge/rapier3d'
 import {
   BoxGeometry,
   CatmullRomCurve3,

@@ -1,5 +1,5 @@
 import { Euler, Matrix4, Quaternion, Vector3 } from 'three'
-import type RAPIER from '@dimforge/rapier3d-compat'
+import type RAPIER from '@dimforge/rapier3d'
 import { registerBookmark } from '../core/debug'
 import type { Rng } from '../core/prng'
 import type { Interactable } from '../player/interact'

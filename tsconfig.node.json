@@ -6,8 +6,10 @@
     "types": ["node"],
     "skipLibCheck": true,
 
-    /* Bundler mode */
-    "module": "nodenext",
+    /* Bundler mode (matches Vite's own template; `nodenext` misreads
+       vite-plugin-wasm's `export default` in its CJS-typed package). */
+    "module": "ESNext",
+    "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",

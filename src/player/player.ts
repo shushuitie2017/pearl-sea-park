@@ -1,5 +1,5 @@
 import { Vector3 } from 'three'
-import type RAPIER from '@dimforge/rapier3d-compat'
+import type RAPIER from '@dimforge/rapier3d'
 import type { GameContext } from '../runtime/context'
 import type { GameSystem } from '../runtime/system'
 import type { PhysicsSystem } from '../physics/physicsWorld'

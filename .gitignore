@@ -26,3 +26,6 @@ dist-ssr
 refs
 issues
 .preview
+
+# Local session artifact — never publish
+HANDOFF.md

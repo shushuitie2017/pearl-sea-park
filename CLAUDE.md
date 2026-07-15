@@ -27,6 +27,11 @@ Three.js（WebGPU + TSL）+ Rapier 物理的第一人称海底游乐园探索游
    `index.html` 里 `/` 开头的资源与 `import.meta.env.BASE_URL` 补前缀。换仓库名要同步改。
 3. 入场闸靠 `navigator.userAgentData.brands` 判 Chromium；自动化 Chrome 常报空 brands
    导致误判，真人 Chrome 正常。
+4. **Rapier 用非 compat 版 `@dimforge/rapier3d`**（wasm 作独立流式文件，非 base64 内联）。
+   `vite.config.ts` 必须挂 `vite-plugin-wasm`；`physicsWorld.ts` 用 `await import('@dimforge/rapier3d')`
+   动态加载（自动 code-split + 免 `.init()`）。`tsconfig.node.json` 用 `moduleResolution:bundler`
+   而非 `nodenext`，否则 tsc 误读 wasm 插件的 CJS 包默认导出报"not callable"。不需要
+   `vite-plugin-top-level-await`（esnext + 动态 import 的 async chunk 原生支持顶层 await）。
 
 ## 部署
 
