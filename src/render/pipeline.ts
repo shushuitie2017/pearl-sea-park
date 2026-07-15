@@ -82,7 +82,7 @@ export class RenderPipelineSystem implements GameSystem {
     this.paneWired = !flags.debug
     ctx.events.on('render/resized', ({ width, height }) => {
       this.basePixelRatio = recommendedPixelRatio(width, height)
-      renderer.setPixelRatio(this.basePixelRatio * ctx.quality.renderScale)
+      renderer.setPixelRatio(this.basePixelRatio * ctx.quality.renderScale * ctx.quality.userScale)
     })
 
     // The renderer itself NEVER tone-maps: every side render target (caustic
@@ -90,7 +90,10 @@ export class RenderPipelineSystem implements GameSystem {
     // output transform is the explicit renderOutput() below.
     renderer.toneMapping = NoToneMapping
 
-    const scenePass = pass(scene, camera, { samples: 4 })
+    // MSAA is the single largest per-pixel cost (every MRT target ×4 samples
+    // plus resolve); the soft tier turns it off entirely rather than shaving
+    // feature counts that were never the bottleneck.
+    const scenePass = pass(scene, camera, { samples: ctx.quality.params.msaaSamples })
     // Alpha is an AO-receiver channel. Lit opaque materials inherit 1; water
     // overrides only this named MRT output to 0. Reusing the normal target's
     // otherwise spare alpha avoids another full-resolution multisampled MRT.
@@ -101,10 +104,14 @@ export class RenderPipelineSystem implements GameSystem {
     const sceneNormal = scenePass.getTextureNode('normal')
     const sceneDepth = scenePass.getTextureNode('depth')
 
-    const aoNode = ao(sceneDepth, sceneNormal, camera)
-    aoNode.resolutionScale = 0.5
-    const aoTexture = aoNode.getTextureNode()
-    const aoResolution = aoNode.resolution as unknown as Node<'vec2'>
+    // The soft tier skips ambient occlusion outright: the half-res GTAO pass
+    // plus its full-resolution 9-tap bilateral reconstruction are pure
+    // per-pixel cost, and per-pixel cost is what that tier exists to shed.
+    const gtaoEnabled = ctx.quality.params.gtao
+    const aoNode = gtaoEnabled ? ao(sceneDepth, sceneNormal, camera) : null
+    if (aoNode) aoNode.resolutionScale = 0.5
+    const aoTexture = aoNode?.getTextureNode() ?? null
+    const aoResolution = (aoNode?.resolution ?? null) as Node<'vec2'> | null
 
     // Three r185 GTAO emits a raw, half-resolution 5x5 magic-square-noise
     // pattern and performs no denoise unless the owner adds one. Reconstruct
@@ -126,7 +133,7 @@ export class RenderPipelineSystem implements GameSystem {
     // normalising those is NaN in WGSL fast math, so all normals go through
     // an epsilon-guarded inverse square root.
     const projectionInverse = uniform(camera.projectionMatrixInverse)
-    const filteredAo = Fn(() => {
+    const filteredAo = !gtaoEnabled ? float(1) : Fn(() => {
       const centerUv = uv()
       const centerDepth = sceneDepth.sample(centerUv).r
       const result = float(1).toVar()
@@ -134,8 +141,8 @@ export class RenderPipelineSystem implements GameSystem {
         const centerView = getViewPosition(centerUv, centerDepth, projectionInverse)
         const centerRaw = sceneNormal.sample(centerUv).rgb
         const centerNormal = centerRaw.mul(inverseSqrt(max(dot(centerRaw, centerRaw), 1e-8)))
-        const centerVisibility = aoTexture.sample(centerUv).r
-        const texel = vec2(1).div(aoResolution)
+        const centerVisibility = aoTexture!.sample(centerUv).r
+        const texel = vec2(1).div(aoResolution!)
         const depthSigma = max(float(0.08), centerView.z.abs().mul(0.04))
         const weightedSum = centerVisibility.toVar()
         const weightSum = float(1).toVar()
@@ -152,7 +159,7 @@ export class RenderPipelineSystem implements GameSystem {
           const sampleView = getViewPosition(sampleUv, sampleDepth, projectionInverse)
           const sampleRaw = sceneNormal.sample(sampleUv).rgb
           const sampleNormal = sampleRaw.mul(inverseSqrt(max(dot(sampleRaw, sampleRaw), 1e-8)))
-          const visibility = aoTexture.sample(sampleUv).r
+          const visibility = aoTexture!.sample(sampleUv).r
           const depthWeight = exp(sampleView.z.sub(centerView.z).abs().div(depthSigma).negate())
           const normalWeight = pow(max(dot(centerNormal, sampleNormal), 0), 12)
           const spatialWeight = x !== 0 && y !== 0 ? 0.70710678 : 1
@@ -177,8 +184,8 @@ export class RenderPipelineSystem implements GameSystem {
     const aoDistance = viewZNode.negate()
     const distanceFilteredAo = mix(filteredAo, float(1), smoothstep(60.0, 160.0, aoDistance))
     const aoReceiver = sceneNormal.a.clamp(0, 1)
-    const aoAmount = mix(float(1), distanceFilteredAo, aoReceiver)
-    const occluded = sceneColor.mul(aoAmount)
+    const aoAmount = gtaoEnabled ? mix(float(1), distanceFilteredAo, aoReceiver) : float(1)
+    const occluded = gtaoEnabled ? sceneColor.mul(aoAmount) : sceneColor
     const withMedium = this.hdrTransform(occluded, { viewZNode }) as typeof occluded
     const withLens = this.lensTransform(withMedium, { sceneColorNode: sceneColor }) as typeof occluded
     const bloomNode = bloom(withLens, 0.35, 0.55, 1.0)
@@ -193,7 +200,7 @@ export class RenderPipelineSystem implements GameSystem {
     let outputNode
     switch (flags.pass) {
       case 'ao':
-        outputNode = vec4(vec3(aoTexture.r), 1.0)
+        outputNode = aoTexture ? vec4(vec3(aoTexture.r), 1.0) : vec4(1)
         break
       case 'ao-filtered':
         outputNode = vec4(vec3(filteredAo), 1.0)
@@ -267,9 +274,10 @@ export class RenderPipelineSystem implements GameSystem {
   update(ctx: GameContext, dt: number): void {
     this.meter?.update(dt)
 
-    // Dynamic resolution: quality breathes render scale; pass targets follow
-    // the renderer's drawing-buffer size automatically.
-    const target = ctx.quality.renderScale
+    // Dynamic resolution: quality breathes render scale (times the guest's
+    // pause-card multiplier); pass targets follow the renderer's
+    // drawing-buffer size automatically.
+    const target = ctx.quality.renderScale * ctx.quality.userScale
     if (Math.abs(target - this.appliedScale) > 0.01) {
       this.appliedScale = target
       ctx.renderer.setPixelRatio(this.basePixelRatio * target)

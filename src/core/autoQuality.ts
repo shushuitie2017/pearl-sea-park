@@ -6,6 +6,7 @@ import { TIERS } from './quality'
 
 const RESULT_KEY = 'the-pearl:auto-quality:v2'
 const MODE_KEY = 'the-pearl:quality-mode'
+const RESOLUTION_KEY = 'the-pearl:render-resolution'
 const SAMPLE_COUNT = 131_072
 const SAMPLE_PASSES = 3
 
@@ -57,6 +58,29 @@ export function getQualityMode(): 'auto' | number {
   }
 }
 
+/** Allowed pause-card resolution multipliers, full to half. */
+export const RENDER_RESOLUTION_OPTIONS = [1, 0.75, 0.5] as const
+
+/** Guest resolution multiplier from the pause card; applies live, no reload. */
+export function setUserRenderScale(scale: number): void {
+  try {
+    localStorage.setItem(RESOLUTION_KEY, String(scale))
+  } catch {
+    // The live multiplier still applies for this session.
+  }
+}
+
+export function getUserRenderScale(): number {
+  try {
+    const raw = localStorage.getItem(RESOLUTION_KEY)
+    if (raw === null) return 1
+    const parsed = Number(raw)
+    return (RENDER_RESOLUTION_OPTIONS as readonly number[]).includes(parsed) ? parsed : 1
+  } catch {
+    return 1
+  }
+}
+
 /**
  * Select the tier before any tier-sized systems initialize. The benchmark is
  * a real WebGPU storage-buffer kernel and `computeAsync` waits for queue
@@ -81,10 +105,12 @@ export async function selectInitialQuality(
       tier: cached.tier,
       source: 'cached-auto',
       benchmarkMs: cached.benchmarkMs,
-      // Never reopen directly at an emergency floor. A previous session may
-      // have sampled a transient hitch, a backgrounded tab, or a different
-      // viewport. Start near native and let the live controller re-evaluate.
-      initialRenderScale: Math.max(0.95, cached.renderScale),
+      // Never reopen directly at an emergency floor — a previous session may
+      // have sampled a transient hitch or a backgrounded tab. But restarting
+      // near-native (0.95) forced struggling machines to lag through the whole
+      // slow walk down again every single visit. 0.75 keeps the benefit of the
+      // doubt while trusting most of what the last session learned.
+      initialRenderScale: Math.max(0.75, cached.renderScale),
     }
   }
 

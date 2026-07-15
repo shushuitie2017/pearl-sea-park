@@ -57,5 +57,8 @@ export function recommendedPixelRatio(
     1.7,
     Math.sqrt(maxPixels / Math.max(1, width * height)),
   )
-  return Math.max(1, dpr)
+  // The ratio may drop below 1 — that IS the pixel cap working. Flooring at 1
+  // silently disabled the cap on ultrawide/4K monitors (3440×1440 is 4.95 M
+  // pixels; 4K is 8.3 M), which is exactly where it matters most.
+  return Math.max(0.5, dpr)
 }

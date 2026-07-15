@@ -6,6 +6,10 @@
 
 export interface QualityParams {
   renderScaleMin: number
+  /** Scene-pass multisample count; 0 disables MSAA entirely. */
+  msaaSamples: number
+  /** Whether the GTAO + bilateral reconstruction chain runs at all. */
+  gtao: boolean
   /** One map per cached directional-shadow level, finest to coarsest. */
   shadowMapSizes: readonly number[]
   godraySteps: number
@@ -15,9 +19,18 @@ export interface QualityParams {
   bubbleBudget: number
 }
 
+// The soft tier drops MSAA and GTAO outright — the largest per-pixel GPU costs
+// (multisampled MRT + full-res bilateral AO) — and gives dynamic resolution a
+// floor low enough to absorb a several-fold pixel deficit instead of a 30% one.
+// Note the CPU side has its own, separate ceiling: ~2100 draw calls of
+// main-thread encode per frame, which no tier parameter can address. The cure
+// is bundling the static world (see render/staticShadowScene.ts for the
+// precedent already used on shadow casters).
 export const TIERS: readonly QualityParams[] = [
   {
-    renderScaleMin: 0.82,
+    renderScaleMin: 0.55,
+    msaaSamples: 0,
+    gtao: false,
     shadowMapSizes: [1024, 512, 512, 512],
     godraySteps: 8,
     causticsSize: 512,
@@ -26,7 +39,9 @@ export const TIERS: readonly QualityParams[] = [
     bubbleBudget: 800,
   },
   {
-    renderScaleMin: 0.88,
+    renderScaleMin: 0.7,
+    msaaSamples: 4,
+    gtao: true,
     shadowMapSizes: [1024, 1024, 512, 512],
     godraySteps: 14,
     causticsSize: 1024,
@@ -35,7 +50,9 @@ export const TIERS: readonly QualityParams[] = [
     bubbleBudget: 1_400,
   },
   {
-    renderScaleMin: 0.9,
+    renderScaleMin: 0.8,
+    msaaSamples: 4,
+    gtao: true,
     shadowMapSizes: [1024, 1024, 1024, 512],
     godraySteps: 22,
     causticsSize: 1024,
@@ -66,6 +83,11 @@ export interface DynamicResolutionSnapshot {
 export class QualityState {
   tier: number
   renderScale = 1
+  /**
+   * Guest-chosen resolution multiplier from the pause card (1 / 0.75 / 0.5),
+   * applied on top of the automatic render scale. Persisted by autoQuality.
+   */
+  userScale = 1
   private frameEma = TARGET_MS
   private pressureSeconds = 0
   private healthySeconds = 0
@@ -122,7 +144,10 @@ export class QualityState {
     const before = this.renderScale
     if (this.pressureSeconds >= DOWNSCALE_PRESSURE_SECONDS) {
       const pressure = this.frameEma / TARGET_MS
-      const step = pressure >= 1.6 ? 0.05 : 0.025
+      // A 2.4× deficit (≈40 ms frames) cannot be walked down in 0.05 steps —
+      // each step waits out a 5 s cooldown, so reaching a deep floor took the
+      // better part of a minute of visible lag. Take big strides when far off.
+      const step = pressure >= 2.4 ? 0.1 : pressure >= 1.6 ? 0.05 : 0.025
       this.renderScale = Math.max(this.params.renderScaleMin, this.renderScale - step)
       this.pressureSeconds = 0
       this.healthySeconds = 0

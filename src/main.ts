@@ -4,7 +4,7 @@ import { getBookmark, parseFlags } from './core/debug'
 import { DebugOverlaySystem } from './core/debugOverlay'
 import { EventBus } from './core/events'
 import type { GameEvents } from './core/gameEvents'
-import { recordAutoRuntimeSample, selectInitialQuality } from './core/autoQuality'
+import { getUserRenderScale, recordAutoRuntimeSample, selectInitialQuality } from './core/autoQuality'
 import { Rng } from './core/prng'
 import { QualityState } from './core/quality'
 import { auditPostcardBookmarks } from './core/postcards'
@@ -107,6 +107,9 @@ async function boot(): Promise<void> {
       paused: true,
     },
   }
+
+  // The guest's persisted pause-card resolution choice applies from boot.
+  ctx.quality.userScale = getUserRenderScale()
 
   const handleResize = (): void => {
     const width = window.innerWidth

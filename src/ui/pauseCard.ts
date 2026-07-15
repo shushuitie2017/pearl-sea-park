@@ -1,4 +1,9 @@
-import { getQualityMode, setQualityMode } from '../core/autoQuality'
+import {
+  getQualityMode,
+  getUserRenderScale,
+  setQualityMode,
+  setUserRenderScale,
+} from '../core/autoQuality'
 import type { PlayerSystem } from '../player/player'
 import type { GameContext } from '../runtime/context'
 import type { GameSystem } from '../runtime/system'
@@ -39,6 +44,15 @@ export class PauseCardSystem implements GameSystem {
           </div>
           <small>切换画质会重新进入乐园。</small>
         </fieldset>
+        <fieldset>
+          <legend>渲染分辨率</legend>
+          <div class="pause-tiers" role="group" aria-label="渲染分辨率">
+            <button type="button" data-res="1">100%</button>
+            <button type="button" data-res="0.75">75%</button>
+            <button type="button" data-res="0.5">50%</button>
+          </div>
+          <small>立即生效；感觉卡顿时调低，流畅度大幅提升。</small>
+        </fieldset>
         <label class="pause-volume">
           <span>音量</span>
           <input type="range" min="0" max="1" step="0.01" value="0.55" />
@@ -60,6 +74,26 @@ export class PauseCardSystem implements GameSystem {
       button.addEventListener('click', () => {
         setQualityMode(raw === 'auto' ? 'auto' : Number(raw))
         window.location.reload()
+      })
+    }
+
+    // Resolution applies live through the dynamic-resolution path — the
+    // renderer just gets a different pixel ratio next frame, no reload.
+    const resButtons = [...root.querySelectorAll<HTMLButtonElement>('[data-res]')]
+    const markResolution = (scale: number): void => {
+      for (const button of resButtons) {
+        const active = Number(button.dataset.res) === scale
+        button.classList.toggle('is-active', active)
+        button.setAttribute('aria-pressed', String(active))
+      }
+    }
+    markResolution(getUserRenderScale())
+    for (const button of resButtons) {
+      button.addEventListener('click', () => {
+        const scale = Number(button.dataset.res)
+        setUserRenderScale(scale)
+        ctx.quality.userScale = scale
+        markResolution(scale)
       })
     }
 
