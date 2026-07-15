@@ -39,7 +39,7 @@ export class AudioEngineSystem implements GameSystem {
   private readonly listenerUp = new Vector3()
   private volume = 0.55
   private submerged = false
-  private encodedAmbience: EncodedRecordedAmbience | null = null
+  private ambiencePromise: Promise<EncodedRecordedAmbience> | null = null
   private recordedAmbience: RecordedAmbience | null = null
   private splashPending = false
   private fountainActive = false
@@ -52,8 +52,16 @@ export class AudioEngineSystem implements GameSystem {
   private whaleBreathBuffer: AudioBuffer | null = null
   private readonly humBuffers = new Map<string, AudioBuffer>()
 
-  async init(ctx: GameContext): Promise<void> {
-    this.encodedAmbience = await preloadRecordedAmbience()
+  init(ctx: GameContext): void {
+    // Fetch the ~5 MB of recorded ambience in the background — do NOT block the
+    // loading bar on it. The AudioContext can only start from the enter-click
+    // gesture, so these files are never needed until (and often after) entry.
+    // Awaiting them here forced every guest to download 5 MB before the Enter
+    // button could appear; now the ambience simply fades in once it arrives.
+    this.ambiencePromise = preloadRecordedAmbience().catch((error: unknown) => {
+      console.error('[audio] Could not preload recorded ambience', error)
+      throw error
+    })
 
     // The context must start from a user gesture: the enter click.
     ctx.events.on('park/entered', ({ revealSeconds }) => this.start(ctx, revealSeconds))
@@ -168,10 +176,14 @@ export class AudioEngineSystem implements GameSystem {
     }
     this.humPcm.clear()
 
-    const encodedAmbience = this.encodedAmbience
-    this.encodedAmbience = null
-    if (encodedAmbience) {
-      void RecordedAmbience.create(context, master, encodedAmbience, this.submerged)
+    // The recorded ambience may still be downloading (it no longer blocks the
+    // loading bar). Chain off the preload promise so it decodes and fades in the
+    // moment it lands, whether that is before or after the guest entered.
+    const ambiencePromise = this.ambiencePromise
+    this.ambiencePromise = null
+    if (ambiencePromise) {
+      void ambiencePromise
+        .then((encoded) => RecordedAmbience.create(context, master, encoded, this.submerged))
         .then((ambience) => {
           if (this.context !== context) {
             ambience.dispose()
