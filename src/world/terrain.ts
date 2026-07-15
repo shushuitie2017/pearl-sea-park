@@ -119,15 +119,29 @@ export class TerrainSystem implements GameSystem {
   }
 
   init(ctx: GameContext): void {
+    // The sand's fine detail — ripples, tone — is procedural in the material,
+    // so the mesh only carries the large-scale height field (dunes ~20-80 m,
+    // basin ~13 m, rim). At 1.26 m/vertex the old uniform 96² grid was 3-4×
+    // finer than any feature and spent ~825 ms of first-load resolving noise.
+    // Keep that density only across the ~380 m core the guest actually roams
+    // and looks at closely; the outer ring drops to the saucer's coarseness —
+    // it sits past the ~250 m aquatic fog, where the shape is haze anyway.
     const verts = [64, 80, 96][ctx.quality.tier] ?? 80
+    const coarseVerts = [24, 28, 32][ctx.quality.tier] ?? 28
+    const CORE_RADIUS = 380
     const material = createSandMaterial(this.medium)
     material.color = new Color(0xffffff)
 
     const chunkSize = EXTENT / CHUNKS
     for (let cz = 0; cz < CHUNKS; cz++) {
       for (let cx = 0; cx < CHUNKS; cx++) {
+        const x0 = -EXTENT / 2 + cx * chunkSize
+        const z0 = -EXTENT / 2 + cz * chunkSize
+        const centerX = x0 + chunkSize / 2
+        const centerZ = z0 + chunkSize / 2
+        const core = Math.hypot(centerX, centerZ) < CORE_RADIUS
         const mesh = new Mesh(
-          buildChunk(-EXTENT / 2 + cx * chunkSize, -EXTENT / 2 + cz * chunkSize, chunkSize, verts),
+          buildChunk(x0, z0, chunkSize, core ? verts : coarseVerts),
           material,
         )
         mesh.receiveShadow = true
