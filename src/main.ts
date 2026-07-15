@@ -207,22 +207,29 @@ async function boot(): Promise<void> {
   const validationMode = flags.view !== null || flags.pass !== 'final' || flags.fixedTime !== null
 
   // Every shader the park can ever ask for is built, driver-compiled, and
-  // used once behind the ticket screen. The Enter button appears only after
-  // this completes: entry is instant and roaming never hits a first-sight
-  // pipeline compile again. Validation runs keep their fast reload instead.
+  // used once behind the ticket screen, so roaming never hits a first-sight
+  // pipeline compile. Previously the Enter button waited for that whole pass
+  // — several seconds of wall-clock on the critical path, past the point most
+  // guests would wait. Instead, show the button the moment the world is built
+  // and run the warmup in the background while the guest reads the ticket.
+  // The live loop owns the renderer exclusively, so it must not start until
+  // the warm finishes; the Enter click awaits it (near-always already done by
+  // then). Validation runs keep their fast reload and skip all of this.
+  let warmup: Promise<void> = Promise.resolve()
   if (!validationMode) {
-    await warmupRenderer(
+    warmup = warmupRenderer(
       ctx,
       registry,
       pipeline,
       (fraction) => ticket.setProgress('prewarm', 0.72 + 0.27 * fraction),
       { invalidateShadows: () => sky?.invalidateShadowLevels() },
-    )
-    // Warmup just drew every mesh, so every attribute is on the GPU: drop
-    // the retained CPU copies of the static park (hundreds of MB of external
-    // memory pressure otherwise feeding random full-GC freezes mid-roam).
-    const geometryRelease = releaseStaticGeometryArrays(scene)
-    canvas.dataset.geometryRelease = JSON.stringify(geometryRelease)
+    ).then(() => {
+      // Warmup just drew every mesh, so every attribute is on the GPU: drop
+      // the retained CPU copies of the static park (hundreds of MB of external
+      // memory pressure otherwise feeding random full-GC freezes mid-roam).
+      const geometryRelease = releaseStaticGeometryArrays(scene)
+      canvas.dataset.geometryRelease = JSON.stringify(geometryRelease)
+    })
     ticket.setProgress('ready', 1)
   }
 
@@ -264,9 +271,15 @@ async function boot(): Promise<void> {
       })
     }
   }
+  if (!validationMode) {
+    // Button is live as soon as the park is built; the warm runs underneath.
+    await ticket.showEnter()
+    // The live loop and the warmup both drive the renderer — never let them
+    // overlap. On a fast click the warm may still be finishing; wait it out
+    // (the ticket reveal covers this) so the first roamed frame is compiled.
+    await warmup
+  }
   loop.start()
-
-  if (!validationMode) await ticket.showEnter()
   ticket.hide()
   sky?.resetShadowPerformance()
   ctx.time.paused = false
