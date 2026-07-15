@@ -1,0 +1,132 @@
+import { BackSide, DirectionalLight, Mesh, Scene, SphereGeometry } from 'three'
+import { MeshBasicNodeMaterial, PMREMGenerator } from 'three/webgpu'
+import { float, normalize, positionLocal } from 'three/tsl'
+import type { GameContext } from '../runtime/context'
+import type { GameSystem } from '../runtime/system'
+import { CachedShadowClipmapNode } from '../render/cachedShadowClipmaps'
+import { DYNAMIC_SHADOW_LAYER } from '../render/layers'
+import { createStaticShadowScene } from '../render/staticShadowScene'
+import { skyRadiance } from './skyRadiance'
+import { SUN_LIGHT_INTENSITY, sunColor, sunDirection } from './sun'
+
+/**
+ * Sky dome (shared radiance function), the one directional sun light with a
+ * cached camera-centered shadow clipmaps, and a once-baked PMREM environment
+ * (the sun never moves, so the environment never regenerates).
+ */
+export class SkySystem implements GameSystem {
+  readonly id = 'ocean-sky'
+
+  private dome: Mesh | null = null
+  private sun: DirectionalLight | null = null
+  private clipmaps: CachedShadowClipmapNode | null = null
+  private debugCanvas: HTMLCanvasElement | null = null
+
+  init(ctx: GameContext): void {
+    const { scene, renderer, quality } = ctx
+
+    const domeMaterial = new MeshBasicNodeMaterial()
+    domeMaterial.colorNode = skyRadiance(normalize(positionLocal), float(1))
+    domeMaterial.side = BackSide
+    domeMaterial.depthWrite = false
+    domeMaterial.fog = false
+    const dome = new Mesh(new SphereGeometry(3400, 48, 24), domeMaterial)
+    dome.frustumCulled = false
+    dome.renderOrder = -100
+    scene.add(dome)
+    this.dome = dome
+
+    const sun = new DirectionalLight(sunColor, SUN_LIGHT_INTENSITY)
+    sun.castShadow = true
+    sun.shadow.mapSize.set(quality.params.shadowMapSizes[0], quality.params.shadowMapSizes[0])
+    sun.shadow.bias = -0.0004
+    sun.shadow.normalBias = 0.02
+    sun.position.copy(sunDirection).multiplyScalar(700)
+    sun.target.position.set(0, 0, 0)
+    scene.add(sun)
+    scene.add(sun.target)
+    this.sun = sun
+    this.clipmaps = new CachedShadowClipmapNode(sun, {
+      camera: ctx.camera,
+      levelMapSizes: quality.params.shadowMapSizes,
+      firstRadius: 28,
+      scaleFactor: 3,
+      maxDistance: 650,
+      // The fixed world never expires. Moving rides/wildlife live on their
+      // own small map below, so broad cached levels no longer force a
+      // full-scene refresh every 45–90 frames.
+      dynamicLevels: 0,
+      updateBudget: 1,
+      maxCacheAge: 0,
+      dynamicCasterLayer: DYNAMIC_SHADOW_LAYER,
+      dynamicCasterHalfWidth: 112,
+      dynamicCasterMapSize: quality.params.shadowMapSizes[0],
+    }).attach()
+    if (ctx.flags.debug) this.debugCanvas = renderer.domElement
+
+    // Fixed sky → bake the environment exactly once.
+    const envScene = new Scene()
+    const envDome = new Mesh(new SphereGeometry(50, 32, 16), domeMaterial)
+    envScene.add(envDome)
+    const pmrem = new PMREMGenerator(renderer)
+    const envTarget = pmrem.fromScene(envScene, 0.03, 1, 90)
+    scene.environment = envTarget.texture
+    scene.environmentIntensity = 0.5
+    pmrem.dispose()
+  }
+
+  update(ctx: GameContext): void {
+    const camera = ctx.camera
+    this.dome?.position.copy(camera.position)
+
+    if (this.debugCanvas && ctx.time.frame % 60 === 0) {
+      this.debugCanvas.dataset.shadowClipmaps = JSON.stringify(this.clipmaps?.debugSnapshot())
+    }
+  }
+
+  /** Called after every world system has initialized, before the first render. */
+  sealStaticShadowCasters(scene: Scene): void {
+    if (!this.clipmaps) return
+    const staticShadows = createStaticShadowScene(scene)
+    this.clipmaps.setStaticCasterScene(staticShadows.scene, staticShadows.casterCount)
+  }
+
+  /**
+   * Force every clipmap level to re-render on the next frame. The loading
+   * warmup uses this so the static-bundle shadow pipelines compile behind
+   * the ticket screen: on the very first render the clipmap update runs
+   * before the node graph exists, so the levels' bundle-scene render objects
+   * would otherwise wait for the first walking recenter to compile.
+   */
+  invalidateShadowLevels(): void {
+    this.clipmaps?.invalidate()
+  }
+
+  shadowPerformanceSnapshot(): ReturnType<CachedShadowClipmapNode['staticPerformanceSnapshot']> | null {
+    return this.clipmaps?.staticPerformanceSnapshot() ?? null
+  }
+
+  /** Allocation-free counters read every frame by the hitch recorder. */
+  staticRefreshCount(): number {
+    return this.clipmaps?.liveStaticRefreshCount ?? 0
+  }
+
+  dynamicShadowRenderCount(): number {
+    return this.clipmaps?.liveDynamicRenderCount ?? 0
+  }
+
+  resetShadowPerformance(): void {
+    this.clipmaps?.resetStaticPerformance()
+  }
+
+  dispose(ctx: GameContext): void {
+    if (this.dome) ctx.scene.remove(this.dome)
+    if (this.sun) {
+      ctx.scene.remove(this.sun.target)
+      ctx.scene.remove(this.sun)
+    }
+    this.clipmaps?.dispose()
+    this.clipmaps = null
+    if (this.debugCanvas) delete this.debugCanvas.dataset.shadowClipmaps
+  }
+}

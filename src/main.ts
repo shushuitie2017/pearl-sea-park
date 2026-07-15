@@ -1,0 +1,276 @@
+import { PerspectiveCamera, Scene } from 'three'
+import { AudioEngineSystem } from './audio/engine'
+import { getBookmark, parseFlags } from './core/debug'
+import { DebugOverlaySystem } from './core/debugOverlay'
+import { EventBus } from './core/events'
+import type { GameEvents } from './core/gameEvents'
+import { recordAutoRuntimeSample, selectInitialQuality } from './core/autoQuality'
+import { Rng } from './core/prng'
+import { QualityState } from './core/quality'
+import { auditPostcardBookmarks } from './core/postcards'
+import { SchedulerSystem } from './core/scheduler'
+import { MaterialsSystem } from './materials/materialsSystem'
+import { PhysicsSystem } from './physics/physicsWorld'
+import { HeldItemSystem } from './player/heldItems'
+import { InteractionSystem } from './player/interact'
+import { PlayerSystem } from './player/player'
+import { TeleportSystem } from './player/teleport'
+import { LensDripSystem } from './render/lensDrips'
+import { RenderPipelineSystem } from './render/pipeline'
+import { releaseStaticGeometryArrays } from './render/releaseGeometry'
+import { createRenderer, webgpuAvailable } from './render/renderer'
+import { warmupRenderer } from './render/warmup'
+import { enableMainDetailLayer } from './render/layers'
+import { FramePerformanceMonitor } from './render/performanceMonitor'
+import { CarouselSystem } from './rides/carousel'
+import { DescentBellSystem } from './rides/descentBell'
+import { GreatWheelSystem } from './rides/greatWheel'
+import { GamesSystem } from './games/gamesSystem'
+import { PearlLineSystem } from './rides/pearlLine'
+import { TorrentSystem } from './rides/torrent'
+import { SubmarineSystem } from './vehicles/submarine'
+import type { GameContext } from './runtime/context'
+import { GameLoop } from './runtime/loop'
+import { SystemRegistry } from './runtime/registry'
+import { SeaMediumSystem } from './sea/medium'
+import { SeaSystem } from './sea/seaSystem'
+import { SkySystem } from './sky/skySystem'
+import { BubbleFountainSystem } from './shows/bubbleFountain'
+import { ScheduleBoardSystem } from './shows/scheduleBoard'
+import { createTicketScreen, TICKET_REVEAL_SECONDS } from './ui/ticketScreen'
+import { PauseCardSystem } from './ui/pauseCard'
+import { ArrivalSystem } from './world/arrival'
+import { DevOrbitSystem } from './world/devOrbit'
+import type { DistrictServices } from './world/districts/atrium'
+import { AtriumSystem } from './world/districts/atrium'
+import { FacilitySignsSystem } from './world/facilitySigns'
+import { FloraSystem } from './world/flora'
+import { ParkAssemblySystem } from './world/parkAssembly'
+import { ParkAmenitiesSystem } from './world/parkAmenities'
+import { TerrainSystem, terrainHeight } from './world/terrain'
+import { TestGallerySystem } from './world/testGallery'
+import { WildlifeSystem } from './wildlife/wildlifeSystem'
+
+const DEFAULT_SEED = 19051906 // the year the gates first opened
+
+async function boot(): Promise<void> {
+  const ticket = createTicketScreen(document.body)
+  const flags = parseFlags()
+
+  if (!(await webgpuAvailable())) {
+    ticket.showError(
+      '本体验需要 WebGPU 支持',
+      '「明珠」仅以 WebGPU 渲染。请使用较新版本的 Chrome、Edge 或 Safari，并确保设备的 GPU 受支持。',
+    )
+    return
+  }
+
+  const canvas = document.createElement('canvas')
+  canvas.id = 'scene'
+  document.body.prepend(canvas)
+
+  ticket.setProgress('render-pipeline', 0.05)
+  let renderer
+  try {
+    renderer = await createRenderer(canvas, flags.debug)
+  } catch {
+    ticket.showError(
+      '本体验需要 WebGPU 支持',
+      '检测到 WebGPU 适配器，但无法初始化。请更新你的浏览器或显卡驱动。',
+    )
+    return
+  }
+
+  ticket.setProgress('quality-benchmark', 0.075)
+  const qualitySelection = await selectInitialQuality(renderer, flags.tier)
+  canvas.dataset.qualitySelection = JSON.stringify(qualitySelection)
+
+  const scene = new Scene()
+  // Far plane covers the sky dome (3400 m) and ocean skirt; near stays tight
+  // for held items. WebGPU float depth keeps this ratio artifact-free.
+  const camera = new PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 5000)
+  enableMainDetailLayer(camera)
+
+  const ctx: GameContext = {
+    renderer,
+    scene,
+    camera,
+    events: new EventBus<GameEvents>(),
+    rng: new Rng(flags.seed ?? DEFAULT_SEED),
+    flags,
+    quality: new QualityState(qualitySelection.tier, qualitySelection.initialRenderScale),
+    // The park clock begins at the gate click, not while the ticket waits.
+    time: {
+      elapsed: flags.fixedTime ?? 0,
+      sim: flags.fixedTime ?? 0,
+      frame: 0,
+      paused: true,
+    },
+  }
+
+  const handleResize = (): void => {
+    const width = window.innerWidth
+    const height = window.innerHeight
+    renderer.setSize(width, height)
+    camera.aspect = width / height
+    camera.updateProjectionMatrix()
+    ctx.events.emit('render/resized', { width, height, renderScale: ctx.quality.renderScale })
+  }
+  window.addEventListener('resize', handleResize)
+
+  const registry = new SystemRegistry()
+  const pipeline = new RenderPipelineSystem()
+  let sky: SkySystem | null = null
+  if (flags.debug) registry.add(new DebugOverlaySystem())
+  if (flags.view === 'gallery') {
+    registry.add(new TestGallerySystem())
+    registry.add(new DevOrbitSystem())
+  } else {
+    sky = registry.add(new SkySystem())
+    const sea = registry.add(new SeaSystem())
+    const medium = registry.add(new SeaMediumSystem(pipeline, sea))
+    registry.add(new LensDripSystem(pipeline, sea))
+    registry.add(new TerrainSystem(medium))
+    registry.add(new FloraSystem(medium))
+    const physics = registry.add(new PhysicsSystem())
+    const materials = registry.add(new MaterialsSystem(medium))
+    const amenities = registry.add(new ParkAmenitiesSystem(materials))
+    registry.add(new ArrivalSystem(physics, materials))
+    const services: DistrictServices = { physics, materials, amenities }
+    let player: PlayerSystem | null = null
+    let heldItems: HeldItemSystem | null = null
+    if (flags.view) {
+      // Fixed validation cameras inspect with orbit controls, not the player.
+      registry.add(new DevOrbitSystem())
+    } else {
+      player = registry.add(new PlayerSystem(physics))
+      registry.add(new PauseCardSystem(player))
+      const interaction = registry.add(new InteractionSystem())
+      services.interaction = interaction
+      heldItems = registry.add(new HeldItemSystem())
+    }
+    registry.add(new AtriumSystem(services))
+    registry.add(new ParkAssemblySystem(services))
+    registry.add(new FacilitySignsSystem(services, terrainHeight))
+    // Every facility marker doubles as a teleport node (guest with a player only).
+    if (player && services.interaction) {
+      registry.add(new TeleportSystem(player, services.interaction, terrainHeight))
+    }
+    registry.add(new DescentBellSystem(services, player))
+    registry.add(new SubmarineSystem(services, player, medium, sea))
+    registry.add(new PearlLineSystem(services, player))
+    registry.add(new GreatWheelSystem(services, player))
+    registry.add(new TorrentSystem(services, player))
+    const carousel = registry.add(new CarouselSystem(services, player))
+    registry.add(new WildlifeSystem(services, medium))
+    registry.add(new BubbleFountainSystem(services, medium))
+    registry.add(new ScheduleBoardSystem(services))
+    registry.add(new GamesSystem(services, medium, heldItems))
+    registry.add(new SchedulerSystem())
+    const audio = registry.add(new AudioEngineSystem())
+    audio.waltzSource = carousel.center
+  }
+  registry.add(pipeline)
+
+  await registry.init(ctx, (label, index, total) =>
+    ticket.setProgress(label, 0.1 + 0.62 * (index / Math.max(1, total))),
+  )
+  // The fixed sun and immutable world can record their shadow commands while
+  // the loading ticket still owns the screen. Later clipmap recenters execute
+  // that bundle instead of traversing the full live scene on the game frame.
+  sky?.sealStaticShadowCasters(scene)
+  const postcardAudit = auditPostcardBookmarks()
+  canvas.dataset.postcardAudit = JSON.stringify(postcardAudit)
+  if (!postcardAudit.complete) {
+    throw new Error(`Missing postcard bookmarks: ${postcardAudit.missing.join(', ')}`)
+  }
+
+  // Postcard/validation cameras: ?view=<bookmark>. Default pose: arrival.
+  const startView = flags.view ?? 'arrival'
+  const bookmark = getBookmark(startView)
+  if (bookmark) {
+    camera.position.set(...bookmark.position)
+    camera.lookAt(...bookmark.look)
+  }
+
+  if (flags.debug) {
+    // Console/automation handle for live inspection (agents + humans).
+    ;(window as unknown as { __pearl: object }).__pearl = {
+      ctx,
+      registry,
+      qualitySelection,
+      postcardAudit,
+    }
+  }
+
+  // Validation shortcuts (?view / ?pass / ?fixedTime) skip the enter gate.
+  const validationMode = flags.view !== null || flags.pass !== 'final' || flags.fixedTime !== null
+
+  // Every shader the park can ever ask for is built, driver-compiled, and
+  // used once behind the ticket screen. The Enter button appears only after
+  // this completes: entry is instant and roaming never hits a first-sight
+  // pipeline compile again. Validation runs keep their fast reload instead.
+  if (!validationMode) {
+    await warmupRenderer(
+      ctx,
+      registry,
+      pipeline,
+      (fraction) => ticket.setProgress('prewarm', 0.72 + 0.27 * fraction),
+      { invalidateShadows: () => sky?.invalidateShadowLevels() },
+    )
+    // Warmup just drew every mesh, so every attribute is on the GPU: drop
+    // the retained CPU copies of the static park (hundreds of MB of external
+    // memory pressure otherwise feeding random full-GC freezes mid-roam).
+    const geometryRelease = releaseStaticGeometryArrays(scene)
+    canvas.dataset.geometryRelease = JSON.stringify(geometryRelease)
+    ticket.setProgress('ready', 1)
+  }
+
+  const loop = new GameLoop(ctx, registry)
+  loop.renderFrame = () => pipeline.render()
+  const performanceMonitor = new FramePerformanceMonitor(renderer)
+  loop.onFrameEnd = (timing) => {
+    performanceMonitor.sample(timing, ctx.time.frame)
+    performanceMonitor.noteFrame(
+      timing,
+      ctx.time.elapsed,
+      ctx.quality.renderScale,
+      sky?.staticRefreshCount() ?? 0,
+      sky?.dynamicShadowRenderCount() ?? 0,
+    )
+    ctx.quality.submitFrame(timing.frameIntervalMs, timing.nowMs)
+    if (ctx.time.frame % 60 === 0) {
+      const info = renderer.info
+      const performance = performanceMonitor.snapshot()
+      recordAutoRuntimeSample(
+        qualitySelection,
+        ctx.quality.tier,
+        ctx.quality.renderScale,
+        performance.presentedFrameMs,
+      )
+      canvas.dataset.performance = JSON.stringify({
+        ...performance,
+        tier: ctx.quality.tier,
+        renderScale: ctx.quality.renderScale,
+        dynamicResolution: ctx.quality.debugSnapshot(),
+        hitches: performanceMonitor.hitches,
+        staticShadows: sky?.shadowPerformanceSnapshot() ?? null,
+        drawCalls: info.render.drawCalls,
+        triangles: info.render.triangles,
+        points: info.render.points,
+        computeCalls: info.compute.frameCalls,
+        renderTargets: info.memory.renderTargets,
+        gpuResourceBytes: info.memory.total,
+      })
+    }
+  }
+  loop.start()
+
+  if (!validationMode) await ticket.showEnter()
+  ticket.hide()
+  sky?.resetShadowPerformance()
+  ctx.time.paused = false
+  ctx.events.emit('park/entered', { revealSeconds: TICKET_REVEAL_SECONDS })
+}
+
+void boot()

@@ -1,0 +1,680 @@
+:root {
+  --deep: #0b2e3c;
+  --deeper: #071e28;
+  --ink: #04161d;
+  --foam: #eaf6f2;
+  --gold: #d8b56a;
+  --gold-dim: #a98c52;
+  --serif: 'Didot', 'Bodoni 72', 'Playfair Display', 'Georgia', 'Noto Serif SC', 'Songti SC', 'Source Han Serif SC', serif;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--ink);
+  font-family: var(--serif);
+}
+
+canvas#scene {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  outline: none;
+}
+
+/* ── Browser compatibility gate ────────────────────────── */
+
+.browser-gate {
+  position: fixed;
+  inset: 0;
+  isolation: isolate;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  padding: clamp(1.5rem, 5vw, 5rem);
+  color: var(--foam);
+  background:
+    radial-gradient(75% 95% at 50% -12%, rgba(86, 168, 175, 0.28), transparent 64%),
+    linear-gradient(180deg, var(--deep), var(--deeper) 56%, var(--ink));
+  user-select: none;
+}
+
+.browser-gate::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  top: -24%;
+  left: 50%;
+  width: min(1050px, 115vw);
+  aspect-ratio: 1.8;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: radial-gradient(ellipse, rgba(126, 210, 208, 0.13), transparent 68%);
+  filter: blur(22px);
+  animation: browser-gate-current 9s ease-in-out infinite alternate;
+}
+
+.browser-gate::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: -15% 0 0;
+  opacity: 0.38;
+  background:
+    radial-gradient(circle at 16% 82%, rgba(234, 246, 242, 0.8) 0 1px, transparent 2px),
+    radial-gradient(circle at 78% 70%, rgba(234, 246, 242, 0.7) 0 1px, transparent 2px),
+    radial-gradient(circle at 66% 92%, rgba(234, 246, 242, 0.45) 0 2px, transparent 3px),
+    radial-gradient(circle at 32% 62%, rgba(234, 246, 242, 0.45) 0 1px, transparent 2px);
+  animation: browser-gate-bubbles 16s linear infinite;
+}
+
+.browser-gate-content {
+  width: min(640px, 100%);
+  text-align: center;
+  animation: browser-gate-arrive 0.9s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.browser-gate-eyebrow {
+  margin-bottom: 1.2rem;
+  color: var(--gold);
+  font-size: clamp(0.62rem, 1.2vw, 0.72rem);
+  letter-spacing: 0.4em;
+  line-height: 1.8;
+  text-transform: uppercase;
+}
+
+.browser-gate h1 {
+  color: var(--foam);
+  font-size: clamp(3.4rem, 10vw, 6.4rem);
+  font-weight: 400;
+  letter-spacing: 0.09em;
+  line-height: 0.95;
+}
+
+.browser-gate-rule {
+  width: min(160px, 38vw);
+  height: 1px;
+  margin: clamp(1.8rem, 5vh, 2.8rem) auto;
+  background: linear-gradient(90deg, transparent, var(--gold), transparent);
+}
+
+.browser-gate-notice {
+  display: grid;
+  justify-items: center;
+  gap: 0.75rem;
+}
+
+.browser-gate-notice strong {
+  color: var(--gold);
+  font-size: clamp(0.9rem, 2vw, 1.05rem);
+  font-weight: 400;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.browser-gate-notice span {
+  max-width: 38ch;
+  color: color-mix(in srgb, var(--foam) 76%, transparent);
+  font-size: clamp(0.95rem, 2vw, 1.08rem);
+  font-style: italic;
+  letter-spacing: 0.035em;
+  line-height: 1.65;
+}
+
+@keyframes browser-gate-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes browser-gate-current {
+  from {
+    opacity: 0.6;
+    transform: translateX(-53%) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-47%) scale(1.06);
+  }
+}
+
+@keyframes browser-gate-bubbles {
+  from {
+    transform: translateY(8%);
+  }
+  to {
+    transform: translateY(-14%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .browser-gate::before,
+  .browser-gate::after,
+  .browser-gate-content {
+    animation: none;
+  }
+}
+
+/* ── Ticket screen ─────────────────────────────────────── */
+
+.ticket {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(
+    120% 90% at 50% 20%,
+    rgba(11, 46, 60, 0.78) 0%,
+    rgba(7, 30, 40, 0.87) 55%,
+    rgba(4, 22, 29, 0.94) 100%
+  );
+  backdrop-filter: blur(13px) saturate(0.72);
+  color: var(--foam);
+  z-index: 100;
+  transition: opacity var(--ticket-reveal-duration, 1.6s) ease;
+  user-select: none;
+}
+
+.ticket.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ticket-card {
+  text-align: center;
+  padding: 3.5rem 4.5rem;
+  border: 1px solid color-mix(in srgb, var(--gold) 45%, transparent);
+  border-radius: 4px;
+  position: relative;
+  background: color-mix(in srgb, var(--ink) 35%, transparent);
+  box-shadow: 0 0 80px rgba(0, 0, 0, 0.35);
+  max-width: min(560px, calc(100vw - 3rem));
+}
+
+.ticket-card::before,
+.ticket-card::after {
+  content: '';
+  position: absolute;
+  inset: 7px;
+  border: 1px solid color-mix(in srgb, var(--gold) 22%, transparent);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.ticket-card::after {
+  inset: 10px;
+}
+
+.ticket-eyebrow {
+  font-size: 0.72rem;
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+  color: var(--gold);
+  margin-bottom: 1.1rem;
+}
+
+.ticket-title {
+  font-size: clamp(2.6rem, 7vw, 4.2rem);
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  line-height: 1.05;
+  color: var(--foam);
+}
+
+.ticket-sub {
+  margin-top: 0.9rem;
+  font-style: italic;
+  font-size: 0.95rem;
+  opacity: 0.75;
+  letter-spacing: 0.06em;
+}
+
+.ticket-rule {
+  width: 120px;
+  height: 1px;
+  margin: 1.6rem auto;
+  background: linear-gradient(90deg, transparent, var(--gold), transparent);
+}
+
+.ticket-status {
+  min-height: 3.4rem;
+  display: grid;
+  place-items: center;
+  gap: 0.6rem;
+}
+
+.ticket-progress-label {
+  font-size: 0.8rem;
+  font-style: italic;
+  opacity: 0.65;
+  letter-spacing: 0.08em;
+}
+
+.ticket-progress {
+  width: 220px;
+  height: 2px;
+  background: color-mix(in srgb, var(--foam) 12%, transparent);
+  overflow: hidden;
+  border-radius: 1px;
+}
+
+.ticket-progress > i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: var(--gold);
+  transition: width 0.35s ease;
+}
+
+.ticket-enter {
+  font-family: var(--serif);
+  font-size: 0.85rem;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--gold);
+  background: none;
+  border: 1px solid var(--gold-dim);
+  border-radius: 2px;
+  padding: 0.85rem 2.2rem;
+  cursor: pointer;
+  transition:
+    background 0.35s ease,
+    color 0.35s ease,
+    box-shadow 0.35s ease;
+}
+
+.ticket-enter:hover {
+  background: var(--gold);
+  color: var(--ink);
+  box-shadow: 0 0 34px color-mix(in srgb, var(--gold) 40%, transparent);
+}
+
+.ticket-error {
+  color: var(--foam);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  max-width: 40ch;
+  opacity: 0.85;
+}
+
+.ticket-error strong {
+  display: block;
+  color: var(--gold);
+  font-weight: 400;
+  font-size: 1.05rem;
+  margin-bottom: 0.5rem;
+  letter-spacing: 0.05em;
+}
+
+/* ── Contextual prompt (the only in-game UI) ───────────── */
+
+.prompt {
+  position: fixed;
+  left: 50%;
+  bottom: 14vh;
+  transform: translateX(-50%) translateY(6px);
+  color: var(--foam);
+  font-size: 1rem;
+  font-style: italic;
+  letter-spacing: 0.05em;
+  text-shadow: 0 1px 14px rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  transition:
+    opacity 0.3s ease,
+    transform 0.3s ease;
+  pointer-events: none;
+  z-index: 40;
+}
+
+.prompt.is-visible {
+  opacity: 0.92;
+  transform: translateX(-50%) translateY(0);
+}
+
+.prompt .key {
+  font-style: normal;
+  font-size: 0.8rem;
+  border: 1px solid color-mix(in srgb, var(--foam) 55%, transparent);
+  border-radius: 3px;
+  padding: 0.1rem 0.45rem;
+  margin-right: 0.55rem;
+  letter-spacing: 0.12em;
+  vertical-align: 1px;
+}
+
+/* ── Pause card ────────────────────────────────────────── */
+
+.pause {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--ink) 55%, transparent);
+  backdrop-filter: blur(6px);
+  z-index: 90;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.4s ease;
+}
+
+.pause.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.pause-card {
+  width: min(560px, calc(100vw - 2rem));
+  color: var(--deep);
+  background:
+    linear-gradient(rgba(244, 229, 182, 0.96), rgba(226, 201, 139, 0.97)),
+    repeating-linear-gradient(90deg, transparent 0 7px, rgba(91, 62, 20, 0.04) 7px 8px);
+  border: 1px solid #8b6c32;
+  border-radius: 4px;
+  padding: 2.7rem 3rem 2.5rem;
+  text-align: center;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.52);
+  position: relative;
+}
+
+.pause-card::before {
+  content: '';
+  position: absolute;
+  inset: 8px;
+  border: 1px solid rgba(96, 65, 20, 0.28);
+  pointer-events: none;
+}
+
+.pause-eyebrow,
+.pause-card legend {
+  color: #73551e;
+  font-size: 0.7rem;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+}
+
+.pause-card h2 {
+  margin: 0.8rem 0 1.5rem;
+  font-size: clamp(1.9rem, 5vw, 2.8rem);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+}
+
+.pause-card button {
+  font: inherit;
+  color: #5c4318;
+  background: transparent;
+  border: 1px solid rgba(92, 67, 24, 0.5);
+  border-radius: 2px;
+  padding: 0.65rem 0.9rem;
+  cursor: pointer;
+}
+
+.pause-card button:hover,
+.pause-card button:focus-visible,
+.pause-card button.is-active {
+  color: #fff9e8;
+  background: #73551e;
+  outline: none;
+}
+
+.pause-resume {
+  min-width: 15rem;
+  letter-spacing: 0.08em;
+}
+
+.pause-rule {
+  height: 1px;
+  margin: 1.7rem auto;
+  background: linear-gradient(90deg, transparent, rgba(92, 67, 24, 0.55), transparent);
+}
+
+.pause-card fieldset {
+  border: 0;
+}
+
+.pause-tiers {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.45rem;
+  margin: 0.8rem 0 0.5rem;
+}
+
+.pause-card small {
+  display: block;
+  font-size: 0.68rem;
+  font-style: italic;
+  opacity: 0.62;
+}
+
+.pause-volume {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1.5rem;
+  font-size: 0.82rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.pause-volume input {
+  accent-color: #73551e;
+}
+
+@media (max-width: 560px) {
+  .pause-card {
+    padding: 2.2rem 1.3rem 2rem;
+  }
+
+  .pause-tiers {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ── Teleport network ──────────────────────────────────── */
+
+.teleport {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(
+    120% 90% at 50% 30%,
+    rgba(11, 46, 60, 0.62) 0%,
+    rgba(7, 30, 40, 0.72) 55%,
+    rgba(4, 22, 29, 0.82) 100%
+  );
+  backdrop-filter: blur(8px) saturate(0.8);
+  z-index: 80;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.28s ease;
+  user-select: none;
+}
+
+.teleport.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.teleport-panel {
+  position: relative;
+  width: min(440px, calc(100vw - 3rem));
+  max-height: min(76vh, 640px);
+  display: flex;
+  flex-direction: column;
+  padding: 2.2rem 2.4rem 1.5rem;
+  text-align: center;
+  color: var(--foam);
+  background: color-mix(in srgb, var(--ink) 62%, transparent);
+  border: 1px solid color-mix(in srgb, var(--gold) 42%, transparent);
+  border-radius: 4px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+}
+
+.teleport-panel::before {
+  content: '';
+  position: absolute;
+  inset: 7px;
+  border: 1px solid color-mix(in srgb, var(--gold) 20%, transparent);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.teleport-eyebrow {
+  font-size: 0.68rem;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--gold);
+  margin-bottom: 0.5rem;
+}
+
+.teleport-heading {
+  font-weight: 400;
+  font-size: 1.5rem;
+  letter-spacing: 0.05em;
+  margin-bottom: 1.1rem;
+  color: var(--foam);
+}
+
+.teleport-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.2rem;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--gold-dim) transparent;
+}
+
+.teleport-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.05rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  transition:
+    background 0.14s ease,
+    border-color 0.14s ease;
+}
+
+.teleport-item-title {
+  font-size: 1rem;
+  letter-spacing: 0.06em;
+  color: color-mix(in srgb, var(--foam) 78%, transparent);
+}
+
+.teleport-item-sub {
+  font-size: 0.66rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--foam) 42%, transparent);
+}
+
+.teleport-item.is-active {
+  background: color-mix(in srgb, var(--gold) 16%, transparent);
+  border-color: color-mix(in srgb, var(--gold) 55%, transparent);
+}
+
+.teleport-item.is-active .teleport-item-title {
+  color: var(--foam);
+}
+
+.teleport-item.is-active .teleport-item-sub {
+  color: var(--gold);
+}
+
+.teleport-hint {
+  display: flex;
+  justify-content: center;
+  gap: 1.1rem;
+  flex-wrap: wrap;
+  margin-top: 1.1rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid color-mix(in srgb, var(--gold) 18%, transparent);
+  font-size: 0.72rem;
+  font-style: italic;
+  color: color-mix(in srgb, var(--foam) 55%, transparent);
+}
+
+.teleport-hint b {
+  font-style: normal;
+  color: var(--gold);
+  letter-spacing: 0.08em;
+  margin-right: 0.3rem;
+}
+
+/* The move itself: a full-screen dissolve to the deep-blue field the visit
+   opens on. Opacity is driven per frame from the transition state machine. */
+.teleport-fade {
+  position: fixed;
+  inset: 0;
+  display: none;
+  place-items: center;
+  background: radial-gradient(
+    130% 100% at 50% 42%,
+    #0b2e3c 0%,
+    #071e28 55%,
+    #04161d 100%
+  );
+  z-index: 95;
+  opacity: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+.teleport-fade.is-active {
+  display: grid;
+}
+
+.teleport-fade-inner {
+  text-align: center;
+  color: var(--foam);
+}
+
+.teleport-fade-title {
+  font-family: var(--serif);
+  font-size: clamp(1.8rem, 5vw, 2.8rem);
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--foam);
+  animation: teleport-pulse 1.7s ease-in-out infinite;
+}
+
+.teleport-fade-sub {
+  margin-top: 0.9rem;
+  font-style: italic;
+  font-size: 0.95rem;
+  letter-spacing: 0.14em;
+  color: var(--gold);
+}
+
+@keyframes teleport-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
